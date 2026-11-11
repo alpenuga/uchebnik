@@ -161,12 +161,25 @@
         </label>
       </div>
       <details style="margin-top:6px">
-        <summary class="note" style="cursor:pointer;font-weight:700;color:var(--green)">⚙️ Настройки Gemini API (ключ хранится только в браузере)</summary>
+        <summary class="note" style="cursor:pointer;font-weight:700;color:var(--green)">⚙️ Настройки Gemini API (ключ и выбор модели)</summary>
         <label>API-ключ (aistudio.google.com)</label>
         <div class="row">
           <input type="password" id="geminiKey" placeholder="AIzaSy..." style="flex:1">
           <button class="ghost" type="button" onclick="saveGeminiKey()">Сохранить</button>
         </div>
+        <label>Модель Gemini (нажмите «🔄 Список» после ввода ключа)</label>
+        <div class="row">
+          <select id="geminiModel" style="flex:1" onchange="onModelChange()">
+            <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+            <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
+            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+            <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+            <option value="custom">✍️ Ввести название модели вручную…</option>
+          </select>
+          <button class="ghost" type="button" onclick="loadGeminiModels()">🔄 Список</button>
+        </div>
+        <input id="geminiCustomModel" placeholder="Например: gemini-3.8-flash" style="display:none;margin-top:6px" oninput="localStorage.setItem('uzb_gemini_custom_model', this.value.trim())">
         <label>Режим ответа</label>
         <select id="geminiMode">
           <option value="tutor">По учебникам + понятное объяснение учителя</option>
