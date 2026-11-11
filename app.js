@@ -341,10 +341,115 @@ function smartAnswer(query, bookRes, dictHits){
   return out;
 }
 
+/* === КРАСИВОЕ ОФОРМЛЕНИЕ ФОРМУЛ, СТЕПЕНЕЙ, ХИМИИ И ИСТОРИИ === */
+(function injectMathStyles(){
+  if (document.getElementById('schoolMathStyles')) return;
+  const st = document.createElement('style');
+  st.id = 'schoolMathStyles';
+  st.textContent = `
+    .msg { line-height: 1.55; }
+    .msg sup { font-size: 0.72em; vertical-align: super; line-height: 0; font-weight: 600; }
+    .msg sub { font-size: 0.72em; vertical-align: sub; line-height: 0; font-weight: 600; }
+    .msg .ai-h { font-weight: 800; color: var(--green); font-size: 1.03em; margin: 8px 0 2px; }
+    .msg .ai-hr { border: 0; border-top: 1px dashed var(--line); margin: 8px 0; }
+    .msg .math-block {
+      background: var(--card); border-left: 3px solid var(--green);
+      padding: 6px 10px; margin: 6px 0; border-radius: 8px;
+      font-weight: 700; overflow-x: auto;
+    }
+    .msg .math-inline { font-weight: 700; padding: 0 2px; }
+    .msg code { background: var(--card); padding: 1px 5px; border-radius: 5px; font-size: 0.9em; }
+  `;
+  document.head.appendChild(st);
+})();
+
+function convertLatexMath(s){
+  return s
+    // Дроби и корни
+    .replace(/\\dfrac\{([^{}]+)\}\{([^{}]+)\}/g, '($1)/($2)')
+    .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '($1)/($2)')
+    .replace(/\\sqrt\[([^{}\]]+)\]\{([^{}]+)\}/g, '<sup>$1</sup>√($2)')
+    .replace(/\\sqrt\{([^{}]+)\}/g, '√($1)')
+    .replace(/\\sqrt\s*([a-zA-Z0-9]+)/g, '√$1')
+    // Стрелки и логика
+    .replace(/\\(?:implies|Rightarrow|Longrightarrow)/g, ' ⇒ ')
+    .replace(/\\(?:iff|Leftrightarrow|Longleftrightarrow)/g, ' ⇔ ')
+    .replace(/\\(?:rightarrows|rightleftarrows|leftrightarrow)/g, ' ⇄ ')
+    .replace(/\\(?:to|rightarrow|longrightarrow)/g, ' → ')
+    .replace(/\\uparrow/g, '↑').replace(/\\downarrow/g, '↓')
+    // Знаки сравнения и множества
+    .replace(/\\infty/g, '∞')
+    .replace(/\\(?:le|leq|leqslant)/g, ' ≤ ')
+    .replace(/\\(?:ge|geq|geqslant)/g, ' ≥ ')
+    .replace(/\\(?:ne|neq)/g, ' ≠ ')
+    .replace(/\\approx/g, ' ≈ ')
+    .replace(/\\pm/g, ' ± ')
+    .replace(/\\cdot/g, '·')
+    .replace(/\\times/g, '×')
+    .replace(/\\div/g, '÷')
+    .replace(/\\notin/g, ' ∉ ').replace(/\\in\b/g, ' ∈ ')
+    .replace(/\\cup/g, ' ∪ ').replace(/\\cap/g, ' ∩ ')
+    .replace(/\\(?:emptyset|varnothing)/g, '∅')
+    // Геометрия и греческие буквы
+    .replace(/\\triangle/g, '△').replace(/\\angle/g, '∠')
+    .replace(/\\perp/g, '⊥').replace(/\\parallel/g, '∥')
+    .replace(/\^\\circ|\\circ/g, '°')
+    .replace(/\\alpha/g, 'α').replace(/\\beta/g, 'β').replace(/\\gamma/g, 'γ')
+    .replace(/\\Delta/g, 'Δ').replace(/\\delta/g, 'δ')
+    .replace(/\\pi\b/g, 'π').replace(/\\rho/g, 'ρ').replace(/\\lambda/g, 'λ')
+    .replace(/\\mu/g, 'μ').replace(/\\Omega/g, 'Ω').replace(/\\omega/g, 'ω')
+    .replace(/\\(?:phi|varphi)/g, 'φ')
+    // Очистка служебных тегов LaTeX
+    .replace(/\\(?:text|mathrm|mathbf|mathit)\{([^{}]+)\}/g, '$1')
+    .replace(/\\(?:left|right)([()[\]|])/g, '$1')
+    .replace(/\\(?:quad|qquad|,|;|!)/g, ' ');
+}
+
+function formatSchoolText(raw){
+  let s = escapeHtml(raw || '');
+
+  // 1. Переводим команды LaTeX в красивые символы
+  s = convertLatexMath(s);
+  s = convertLatexMath(s); // повтор для вложенных скобок
+
+  // 2. Блочные формулы $$...$$ и \[...\]
+  s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, m) => `<div class="math-block">${m.trim()}</div>`);
+  s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `<div class="math-block">${m.trim()}</div>`);
+
+  // 3. Строчные формулы $...$ и \(...\)
+  s = s.replace(/\$([^\n$]+?)\$/g, (_, m) => `<span class="math-inline">${m.trim()}</span>`);
+  s = s.replace(/\\\(([^\n]+?)\\\)/g, (_, m) => `<span class="math-inline">${m.trim()}</span>`);
+
+  // 4. Верхние и нижние индексы: x^{2}, x^2, x_{1}, x_1, м/с^2, 10^{-5}
+  s = s.replace(/\^\{([^{}\n]+)\}/g, '<sup>$1</sup>');
+  s = s.replace(/_\{([^{}\n]+)\}/g, '<sub>$1</sub>');
+  s = s.replace(/\^([+\-]?\d+|[a-zA-Z])/g, '<sup>$1</sup>');
+  s = s.replace(/([a-zA-Zа-яА-Я0-9)])_(\d+|[a-zA-Z])/g, '$1<sub>$2</sub>');
+
+  // 5. Химические формулы (H2O, H2SO4, CO2, Ca(OH)2, Fe2O3, C6H12O6 и др.)
+  s = s.replace(/\b((?:[A-Z][a-z]?|\([A-Za-z0-9]+\))\d+)+([A-Z][a-z]?)?\b/g, match =>
+    match.replace(/([A-Z][a-z]?|\))(\d+)/g, '$1<sub>$2</sub>')
+  );
+
+  // 6. Римские цифры для веков по истории (например, xiv век -> XIV век)
+  s = s.replace(/\b([ivxlcdm]{1,7})(\s*(?:[–\-]\s*[ivxlcdm]{1,7})?\s*(?:в\.|вв\.|век|asr|century))/gi,
+    (_, rom, tail) => rom.toUpperCase() + tail
+  );
+
+  // 7. Markdown: заголовки, линии, жирный, курсив, код
+  s = s.replace(/^\s*---+\s*$/gm, '<hr class="ai-hr">');
+  s = s.replace(/^#{1,4}\s+(.+)$/gm, '<div class="ai-h">$1</div>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  s = s.replace(/\*([^*\n]+)\*/g, '<i>$1</i>');
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+  return s;
+}
+
 function addMsg(role, text){
   const d = document.createElement('div');
   d.className = 'msg ' + role;
-  d.textContent = text;
+  d.innerHTML = formatSchoolText(text);
   $('messages').appendChild(d);
   $('messages').scrollTop = 1e9;
 }
@@ -424,7 +529,8 @@ async function askGemini(query, bookRes, dictHits){
 1. В первую очередь опирайся на приведённые фрагменты учебников и словаря из базы ученика (указывай источник).
 2. Объясняй простыми словами и по шагам, адаптируя сложность под ${grade}.
 3. Если фрагментов из базы нет или их мало — дай правильное объяснение или решение по школьной программе Узбекистана для уровня «${grade}» и пометь, что это решение от ИИ-учителя.
-4. Отвечай на языке вопроса ученика (русский, oʻzbek tili или English).`;
+4. Отвечай на языке вопроса ученика (русский, oʻzbek tili или English).
+5. Оформляй формулы читаемо: используй символы ², ³, √, ⇒, ≤, ≥, ≠, ∞, π, индексы в химии (H₂SO₄, CO₂) и верхний регистр для римских цифр веков (XIV век, XIX–XX вв.).`;
 
   const prompt = `Контекст из базы ученика:\n${ctxDict ? ctxDict + '\n\n' : ''}${ctxBooks || 'Точных цитат в загруженных книгах не найдено.'}\n\nВопрос ученика (${grade}): ${query}`;
 
