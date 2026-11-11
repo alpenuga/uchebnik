@@ -1,0 +1,20 @@
+{
+  "name": "AI Школьный Помощник · Узбекистан (1–11 класс)",
+  "short_name": "AI Maktab",
+  "description": "Офлайн и ИИ-помощник по учебникам и словарям 1–11 классов Узбекистана",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1611",
+  "theme_color": "#1b5e20",
+  "lang": "ru",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
