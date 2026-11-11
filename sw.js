@@ -1,4 +1,4 @@
-const CACHE = 'uzb-school-ai-v2';
+const CACHE = 'uzb-school-ai-v3';
 const ASSETS = [
   './',
   './index.html',
