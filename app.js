@@ -454,18 +454,44 @@ function addMsg(role, text){
   $('messages').scrollTop = 1e9;
 }
 
+/* === GEMINI API: АВТОВЫБОР РАБОЧЕЙ МОДЕЛИ === */
+const DEFAULT_MODELS = [
+  'gemini-3.0-flash',
+  'gemini-3-flash-preview',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash-latest'
+];
+
+function getDeadModels(){
+  try { return new Set(JSON.parse(localStorage.getItem('uzb_dead_models') || '[]')); }
+  catch(e) { return new Set(); }
+}
+function markModelDead(m){
+  const dead = getDeadModels();
+  dead.add(m);
+  localStorage.setItem('uzb_dead_models', JSON.stringify([...dead]));
+}
+
 function saveGeminiKey(){
   const k = $('geminiKey').value.trim();
   localStorage.setItem('uzb_gemini_key', k);
-  alert(k ? 'Ключ сохранён! Теперь можете нажать «🔄 Список», чтобы загрузить доступные модели.' : 'Ключ удалён.');
+  localStorage.removeItem('uzb_dead_models');
+  localStorage.removeItem('uzb_last_good_model');
+  if (k) {
+    loadGeminiModels(true);
+  } else {
+    alert('Ключ удалён.');
+  }
 }
 
 function getSelectedModel(){
-  const sel = $('geminiModel') ? $('geminiModel').value : 'gemini-3.8-flash';
-  let m = sel === 'custom'
-    ? (($('geminiCustomModel') && $('geminiCustomModel').value) || 'gemini-3.8-flash')
-    : sel;
-  return m.trim().replace(/^models\//, '');
+  if (!$('geminiModel')) return 'auto';
+  const sel = $('geminiModel').value;
+  if (sel === 'custom') {
+    return (($('geminiCustomModel') && $('geminiCustomModel').value) || 'auto').trim().replace(/^models\//, '');
+  }
+  return sel.trim().replace(/^models\//, '');
 }
 
 function onModelChange(){
@@ -477,41 +503,114 @@ function onModelChange(){
   }
 }
 
-async function loadGeminiModels(){
-  const key = (localStorage.getItem('uzb_gemini_key') || ($('geminiKey') && $('geminiKey').value) || '').trim();
-  if (!key) return alert('Сначала введите и сохраните API-ключ!');
-  showLoad(true, 'Запрашиваю доступные модели у Google…');
-  try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || ('HTTP ' + res.status));
-    const models = (data.models || [])
-      .filter(m => (m.supportedGenerationMethods || []).includes('generateContent') && m.name.includes('gemini'))
-      .map(m => m.name.replace(/^models\//, ''));
-    if (!models.length) throw new Error('Не найдено доступных моделей generateContent.');
-    localStorage.setItem('uzb_gemini_model_list', JSON.stringify(models));
-    populateModelSelect(models);
-    alert('Загружено доступных моделей: ' + models.length + '\nВыберите нужную в списке.');
-  } catch (e) {
-    alert('Ошибка получения списка моделей:\n' + (e.message || e));
+function populateModelSelect(models){
+  if (!$('geminiModel')) return;
+  const dead = getDeadModels();
+  const clean = (models || DEFAULT_MODELS).filter(m => m && !dead.has(m));
+  const saved = localStorage.getItem('uzb_gemini_model') || 'auto';
+  const lastGood = localStorage.getItem('uzb_last_good_model');
+
+  $('geminiModel').innerHTML =
+    `<option value="auto">⚡ Автовыбор рабочей модели${lastGood ? ' (' + escapeHtml(lastGood) + ')' : ''}</option>` +
+    clean.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('') +
+    `<option value="custom">✍️ Ввести название модели вручную…</option>`;
+
+  if (saved === 'auto' || saved === 'custom' || clean.includes(saved)) {
+    $('geminiModel').value = saved;
+  } else {
+    $('geminiModel').value = 'auto';
   }
-  showLoad(false);
+  onModelChange();
 }
 
-function populateModelSelect(models){
-  if (!$('geminiModel') || !Array.isArray(models) || !models.length) return;
-  const saved = localStorage.getItem('uzb_gemini_model') || models[0];
-  $('geminiModel').innerHTML = models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('')
-    + `<option value="custom">✍️ Ввести название модели вручную…</option>`;
-  if (models.includes(saved) || saved === 'custom') $('geminiModel').value = saved;
-  onModelChange();
+async function fetchModelsFromGoogle(key){
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (!res.ok) return [];
+    const models = (data.models || [])
+      .filter(m => {
+        const name = (m.name || '').toLowerCase();
+        const methods = m.supportedGenerationMethods || [];
+        if (!methods.includes('generateContent') || !name.includes('gemini')) return false;
+        if (/(tts|image|imagen|embedding|aqa|audio|robotics|computer-use|veo|learnlm)/.test(name)) return false;
+        return true;
+      })
+      .map(m => m.name.replace(/^models\//, ''));
+
+    models.sort((a, b) => {
+      const rank = s => {
+        let r = 0;
+        if (s.includes('3.0-flash') || s.includes('3-flash')) r += 100;
+        else if (s.includes('2.5-flash-lite')) r += 90;
+        else if (s.includes('flash')) r += 70;
+        else if (s.includes('pro')) r += 30;
+        if (s.includes('exp')) r -= 20;
+        return r;
+      };
+      return rank(b) - rank(a);
+    });
+
+    if (models.length) localStorage.setItem('uzb_gemini_model_list', JSON.stringify(models));
+    return models;
+  } catch(e) {
+    clearTimeout(timer);
+    return [];
+  }
+}
+
+async function loadGeminiModels(silent){
+  const key = (localStorage.getItem('uzb_gemini_key') || ($('geminiKey') && $('geminiKey').value) || '').trim();
+  if (!key) return alert('Сначала введите API-ключ!');
+  showLoad(true, 'Ищу доступные модели Google…');
+  const models = await fetchModelsFromGoogle(key);
+  showLoad(false);
+  if (models.length) {
+    localStorage.setItem('uzb_gemini_model', 'auto');
+    populateModelSelect(models);
+    if (!silent) alert('Найдено моделей: ' + models.length + '\nВключён «⚡ Автовыбор рабочей модели».');
+  } else if (!silent) {
+    alert('Не удалось получить список моделей. Проверьте ключ или интернет.');
+  }
+}
+
+async function callSingleModel(model, key, systemInstruction, prompt){
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 22000);
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemInstruction }] },
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.3, maxOutputTokens: 1200 }
+      })
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (!res.ok) {
+      const msg = data.error?.message || ('HTTP ' + res.status);
+      const err = new Error(msg);
+      err.status = res.status;
+      throw err;
+    }
+    return data.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || null;
+  } catch(e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error('Превышено время ожидания ответа');
+    throw e;
+  }
 }
 
 async function askGemini(query, bookRes, dictHits){
   const key = (localStorage.getItem('uzb_gemini_key') || ($('geminiKey') && $('geminiKey').value) || '').trim();
   if (!key) return null;
 
-  const model = getSelectedModel();
   const mode = $('geminiMode') ? $('geminiMode').value : 'tutor';
   const grade = $('studentGrade') ? $('studentGrade').value : 'универсальный (1–11 класс)';
 
@@ -530,23 +629,60 @@ async function askGemini(query, bookRes, dictHits){
 2. Объясняй простыми словами и по шагам, адаптируя сложность под ${grade}.
 3. Если фрагментов из базы нет или их мало — дай правильное объяснение или решение по школьной программе Узбекистана для уровня «${grade}» и пометь, что это решение от ИИ-учителя.
 4. Отвечай на языке вопроса ученика (русский, oʻzbek tili или English).
-5. Оформляй формулы читаемо: используй символы ², ³, √, ⇒, ≤, ≥, ≠, ∞, π, индексы в химии (H₂SO₄, CO₂) и верхний регистр для римских цифр веков (XIV век, XIX–XX вв.).`;
+5. Оформляй формулы читаемо: используй символы ², ³, √, ⇒, ≤, ≥, ≠, ∞, π, индексы в химии (H₂SO₄, CO₂) и верхний регистр для римских цифр веков (XIV век).`;
 
   const prompt = `Контекст из базы ученика:\n${ctxDict ? ctxDict + '\n\n' : ''}${ctxBooks || 'Точных цитат в загруженных книгах не найдено.'}\n\nВопрос ученика (${grade}): ${query}`;
 
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: systemInstruction }] },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 1200 }
-    })
-  });
+  const chosen = getSelectedModel();
+  const dead = getDeadModels();
+  let queue = [];
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(`[${model}] ` + (data.error?.message || ('HTTP ' + res.status)));
-  return data.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || null;
+  if (chosen !== 'auto') {
+    queue.push(chosen);
+  } else {
+    const lastGood = localStorage.getItem('uzb_last_good_model');
+    if (lastGood && !dead.has(lastGood)) queue.push(lastGood);
+
+    let cachedList = [];
+    try { cachedList = JSON.parse(localStorage.getItem('uzb_gemini_model_list') || '[]'); } catch(e){}
+    if (!cachedList.length) cachedList = await fetchModelsFromGoogle(key);
+
+    [...cachedList, ...DEFAULT_MODELS].forEach(m => {
+      if (m && !dead.has(m) && !queue.includes(m)) queue.push(m);
+    });
+  }
+
+  let lastError = 'Не удалось подобрать модель';
+  for (let i = 0; i < queue.length; i++) {
+    const m = queue[i];
+    showLoad(true, `Спрашиваю ${m}…`);
+    try {
+      const text = await callSingleModel(m, key, systemInstruction, prompt);
+      if (text) {
+        localStorage.setItem('uzb_last_good_model', m);
+        populateModelSelect(JSON.parse(localStorage.getItem('uzb_gemini_model_list') || 'null'));
+        return { text, model: m };
+      }
+    } catch (err) {
+      const msg = String(err.message || err);
+      lastError = `[${m}] ${msg}`;
+
+      const suggested = msg.match(/models\/(gemini-[a-zA-Z0-9.\-_]+)/i);
+      if (suggested && suggested[1]) {
+        const rec = suggested[1];
+        if (!queue.includes(rec)) queue.splice(i + 1, 0, rec);
+      }
+
+      if (/no longer available|not found|not supported|404/i.test(msg)) {
+        markModelDead(m);
+        continue;
+      }
+      if (/API_KEY_INVALID|key not valid/i.test(msg)) {
+        throw new Error('Неверный API-ключ Gemini. Проверьте ключ в настройках.');
+      }
+    }
+  }
+  throw new Error(lastError);
 }
 
 async function sendMessage(){
@@ -563,11 +699,11 @@ async function sendMessage(){
     let answered = false;
     if ($('useGemini') && $('useGemini').checked && navigator.onLine) {
       try {
-        const aiText = await askGemini(q, bookRes, dictHits);
-        if (aiText) {
+        const res = await askGemini(q, bookRes, dictHits);
+        if (res && res.text) {
           const srcNames = [...new Set(bookRes.hits.map(h => h.book))];
           const footer = srcNames.length ? `\n\n📚 Источники из базы: ${srcNames.join(', ')}` : '';
-          addMsg('ai', '✨ Учитель (Gemini):\n\n' + aiText.trim() + footer);
+          addMsg('ai', `✨ Учитель (${res.model}):\n\n` + res.text.trim() + footer);
           answered = true;
         }
       } catch (ge) {
@@ -883,15 +1019,11 @@ if ($('studentGrade')) {
 
 try {
   const savedList = JSON.parse(localStorage.getItem('uzb_gemini_model_list') || 'null');
-  if (savedList) populateModelSelect(savedList);
-} catch(e){}
+  populateModelSelect(savedList);
+} catch(e){ populateModelSelect(null); }
 if ($('geminiCustomModel')) $('geminiCustomModel').value = localStorage.getItem('uzb_gemini_custom_model') || '';
-if ($('geminiModel') && localStorage.getItem('uzb_gemini_model')) {
-  $('geminiModel').value = localStorage.getItem('uzb_gemini_model');
-  onModelChange();
-}
 
-addMsg('ai', 'Salom! Hello! Здравствуйте!\nЯ универсальный школьный помощник (1–11 класс).\n1) Загрузите словарь с GitHub и свои учебники.\n2) Выберите свой класс во вкладке «Чат».\n3) Для объяснений от ИИ-учителя добавьте бесплатный ключ Gemini в настройках чата.');
+addMsg('ai', 'Salom! Hello! Здравствуйте!\nЯ универсальный школьный помощник (1–11 класс).\n1) Загрузите словарь с GitHub и свои учебники.\n2) Выберите свой класс во вкладке «Чат».\n3) Для объяснений от ИИ-учителя добавьте бесплатный ключ Gemini в настройках чата (модель подберётся автоматически).');
 
 $('tabLibBtn').onclick = () => switchTab('lib');
 $('tabDictBtn').onclick = () => switchTab('dict');
