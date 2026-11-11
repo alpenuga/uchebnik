@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#e8f5e9" id="themeColor">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="AI Maktab">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <title>AI Школьный Помощник · Узбекистан (1–11 класс)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+<div class="overlay" id="overlay">Обработка…</div>
+<div class="app">
+  <header>
+    <div>
+      <h1>AI Школьный Помощник</h1>
+      <div class="sub">Узбекистан · 1–11 класс · учебники + словарь + Gemini</div>
+    </div>
+    <div class="row">
+      <button class="ghost icon" id="themeBtn" type="button" title="Тема">🌙</button>
+      <button class="ghost" id="installBtn" type="button" style="display:none">Установить</button>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <button class="on" id="tabLibBtn" type="button">Книги</button>
+    <button id="tabDictBtn" type="button">Словарь</button>
+    <button id="tabCardsBtn" type="button">Карточки</button>
+    <button id="tabChatBtn" type="button">Чат</button>
+  </div>
+
+  <!-- ВКЛАДКА: КНИГИ -->
+  <section class="panel on" id="libPanel">
+    <div class="card">
+      <h2>Добавить учебник (любой класс)</h2>
+      <label>Предмет</label>
+      <select id="subject"></select>
+      <label>Название и класс</label>
+      <input id="bookName" placeholder="Например: Математика 5 класс / История 9 класс">
+      <label>Текст</label>
+      <textarea id="bookContent" placeholder="Вставьте текст учебника или главы…"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button type="button" onclick="addFromForm()">Добавить</button>
+        <button class="ghost" type="button" onclick="exportAll()">Экспорт базы</button>
+        <button class="ghost" type="button" onclick="document.getElementById('importJSON').click()">Импорт JSON</button>
+      </div>
+      <label>Файлы учебников (.txt, .pdf, .json)</label>
+      <input type="file" id="files" multiple accept=".txt,.pdf,.json,text/plain,application/pdf,application/json">
+      <p class="note">JSON сохраняет и учебники, и словарь. Все книги хранятся в памяти устройства.</p>
+      <input type="file" id="importJSON" accept=".json,application/json" hidden>
+    </div>
+    <div class="card">
+      <h2>Мои учебники</h2>
+      <select id="filterSubject"></select>
+      <div class="stats" id="stats"></div>
+      <div id="bookList"></div>
+    </div>
+  </section>
+
+  <!-- ВКЛАДКА: СЛОВАРЬ -->
+  <section class="panel" id="dictPanel">
+    <div class="card">
+      <h2>Базовый школьный словарь</h2>
+      <p class="note">Загружает файл <b>dicts.json</b> из вашего репозитория GitHub Pages в память устройства.</p>
+      <label>Адрес JSON</label>
+      <input id="dictUrl" value="./dicts.json">
+      <div class="row" style="margin-top:8px">
+        <button type="button" onclick="loadDictsFromGitHub()">Загрузить с GitHub</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Пополнить словарь</h2>
+      <div class="grid2">
+        <div><label>Язык слова</label><select id="dictLang"></select></div>
+        <div><label>Предмет</label><select id="dictSubject"></select></div>
+      </div>
+      <label>Слово / термин</label>
+      <input id="dictWord" placeholder="force / kuch / сила">
+      <label>Перевод</label>
+      <input id="dictTr" placeholder="kuch · сила · force">
+      <label>Определение</label>
+      <textarea id="dictDef"></textarea>
+      <label>Пример</label>
+      <input id="dictEx">
+      <div class="row" style="margin-top:8px">
+        <button type="button" onclick="addDictFromForm()">Добавить слово</button>
+        <button class="ghost" type="button" onclick="exportDicts()">Экспорт словаря</button>
+      </div>
+      <label>Массово (слово — перевод)</label>
+      <textarea id="dictBulk" placeholder="apple — olma — яблоко"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button type="button" onclick="addDictBulk()">Добавить список</button>
+        <button class="ghost" type="button" onclick="document.getElementById('dictFiles').click()">Файлы словаря</button>
+      </div>
+      <input type="file" id="dictFiles" multiple accept=".txt,.csv,.json,text/plain,application/json" hidden>
+    </div>
+    <div class="card">
+      <h2>Статьи словаря</h2>
+      <div class="grid2">
+        <select id="dictFilterLang"></select>
+        <select id="dictFilterSubject"></select>
+      </div>
+      <input id="dictQuery" placeholder="Поиск: olma, force, теорема…">
+      <div class="stats" id="dictStats"></div>
+      <div id="dictList"></div>
+      <div class="row"><button class="ghost" id="moreDictBtn" type="button" style="display:none">Ещё</button></div>
+    </div>
+  </section>
+
+  <!-- ВКЛАДКА: КАРТОЧКИ -->
+  <section class="panel" id="cardsPanel">
+    <div class="card">
+      <h2>Карточки по параграфам</h2>
+      <label>Предмет</label>
+      <select id="cardSubject"></select>
+      <label>Учебник</label>
+      <select id="cardBook"></select>
+      <label>Поиск по карточкам</label>
+      <input id="cardQuery" placeholder="теорема, formula, sana…">
+      <div class="stats" id="cardStats"></div>
+      <div id="cardList"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" id="moreCardsBtn" type="button" style="display:none">Ещё карточки</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ВКЛАДКА: ЧАТ -->
+  <section class="panel" id="chatPanel">
+    <div class="card" style="padding:8px 12px">
+      <div class="grid2">
+        <div>
+          <label>Предмет</label>
+          <select id="chatSubject"></select>
+        </div>
+        <div>
+          <label>Класс ученика</label>
+          <select id="studentGrade">
+            <option value="универсальный (1–11 класс)">Все классы (1–11)</option>
+            <option value="1–4 класс (начальная школа)">1–4 класс</option>
+            <option value="5 класс">5 класс</option>
+            <option value="6 класс">6 класс</option>
+            <option value="7 класс">7 класс</option>
+            <option value="8 класс">8 класс</option>
+            <option value="9 класс">9 класс</option>
+            <option value="10 класс">10 класс</option>
+            <option value="11 класс">11 класс</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-top:8px;align-items:center">
+        <label style="display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" id="useDict" checked style="width:auto"> Словарь
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" id="useGemini" checked style="width:auto"> ✨ Учитель Gemini
+        </label>
+      </div>
+      <details style="margin-top:6px">
+        <summary class="note" style="cursor:pointer;font-weight:700;color:var(--green)">⚙️ Настройки Gemini API (ключ хранится только в браузере)</summary>
+        <label>API-ключ (aistudio.google.com)</label>
+        <div class="row">
+          <input type="password" id="geminiKey" placeholder="AIzaSy..." style="flex:1">
+          <button class="ghost" type="button" onclick="saveGeminiKey()">Сохранить</button>
+        </div>
+        <label>Режим ответа</label>
+        <select id="geminiMode">
+          <option value="tutor">По учебникам + понятное объяснение учителя</option>
+          <option value="strict">Строго только по тексту учебников</option>
+        </select>
+      </details>
+    </div>
+    <div id="messages"></div>
+    <div class="chatbar">
+      <input id="userInput" placeholder="Savol / Question / Вопрос по уроку…" autocomplete="off">
+      <button type="button" onclick="sendMessage()">➤</button>
+    </div>
+    <p class="note">С интернетом и ключом отвечает Gemini по вашим книгам; без интернета — офлайн-поиск.</p>
+  </section>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>
