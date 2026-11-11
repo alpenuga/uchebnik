@@ -352,13 +352,61 @@ function addMsg(role, text){
 function saveGeminiKey(){
   const k = $('geminiKey').value.trim();
   localStorage.setItem('uzb_gemini_key', k);
-  alert(k ? 'Ключ Gemini сохранён в этом браузере!' : 'Ключ удалён.');
+  alert(k ? 'Ключ сохранён! Теперь можете нажать «🔄 Список», чтобы загрузить доступные модели.' : 'Ключ удалён.');
+}
+
+function getSelectedModel(){
+  const sel = $('geminiModel') ? $('geminiModel').value : 'gemini-3.8-flash';
+  let m = sel === 'custom'
+    ? (($('geminiCustomModel') && $('geminiCustomModel').value) || 'gemini-3.8-flash')
+    : sel;
+  return m.trim().replace(/^models\//, '');
+}
+
+function onModelChange(){
+  if (!$('geminiModel')) return;
+  const val = $('geminiModel').value;
+  localStorage.setItem('uzb_gemini_model', val);
+  if ($('geminiCustomModel')) {
+    $('geminiCustomModel').style.display = val === 'custom' ? 'block' : 'none';
+  }
+}
+
+async function loadGeminiModels(){
+  const key = (localStorage.getItem('uzb_gemini_key') || ($('geminiKey') && $('geminiKey').value) || '').trim();
+  if (!key) return alert('Сначала введите и сохраните API-ключ!');
+  showLoad(true, 'Запрашиваю доступные модели у Google…');
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || ('HTTP ' + res.status));
+    const models = (data.models || [])
+      .filter(m => (m.supportedGenerationMethods || []).includes('generateContent') && m.name.includes('gemini'))
+      .map(m => m.name.replace(/^models\//, ''));
+    if (!models.length) throw new Error('Не найдено доступных моделей generateContent.');
+    localStorage.setItem('uzb_gemini_model_list', JSON.stringify(models));
+    populateModelSelect(models);
+    alert('Загружено доступных моделей: ' + models.length + '\nВыберите нужную в списке.');
+  } catch (e) {
+    alert('Ошибка получения списка моделей:\n' + (e.message || e));
+  }
+  showLoad(false);
+}
+
+function populateModelSelect(models){
+  if (!$('geminiModel') || !Array.isArray(models) || !models.length) return;
+  const saved = localStorage.getItem('uzb_gemini_model') || models[0];
+  $('geminiModel').innerHTML = models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('')
+    + `<option value="custom">✍️ Ввести название модели вручную…</option>`;
+  if (models.includes(saved) || saved === 'custom') $('geminiModel').value = saved;
+  onModelChange();
 }
 
 async function askGemini(query, bookRes, dictHits){
   const key = (localStorage.getItem('uzb_gemini_key') || ($('geminiKey') && $('geminiKey').value) || '').trim();
   if (!key) return null;
 
+  const model = getSelectedModel();
   const mode = $('geminiMode') ? $('geminiMode').value : 'tutor';
   const grade = $('studentGrade') ? $('studentGrade').value : 'универсальный (1–11 класс)';
 
@@ -375,23 +423,23 @@ async function askGemini(query, bookRes, dictHits){
 Правила:
 1. В первую очередь опирайся на приведённые фрагменты учебников и словаря из базы ученика (указывай источник).
 2. Объясняй простыми словами и по шагам, адаптируя сложность под ${grade}.
-3. Если фрагментов из базы нет или их мало — дай правильное объяснение по школьной программе Узбекистана для уровня «${grade}» и пометь, что это дополнение от ИИ-учителя.
+3. Если фрагментов из базы нет или их мало — дай правильное объяснение или решение по школьной программе Узбекистана для уровня «${grade}» и пометь, что это решение от ИИ-учителя.
 4. Отвечай на языке вопроса ученика (русский, oʻzbek tili или English).`;
 
   const prompt = `Контекст из базы ученика:\n${ctxDict ? ctxDict + '\n\n' : ''}${ctxBooks || 'Точных цитат в загруженных книгах не найдено.'}\n\nВопрос ученика (${grade}): ${query}`;
 
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`, {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: systemInstruction }] },
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 900 }
+      generationConfig: { temperature: 0.3, maxOutputTokens: 1200 }
     })
   });
 
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || ('HTTP ' + res.status));
+  if (!res.ok) throw new Error(`[${model}] ` + (data.error?.message || ('HTTP ' + res.status)));
   return data.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || null;
 }
 
@@ -725,6 +773,16 @@ if ($('geminiKey')) $('geminiKey').value = localStorage.getItem('uzb_gemini_key'
 if ($('studentGrade')) {
   if (localStorage.getItem('uzb_grade')) $('studentGrade').value = localStorage.getItem('uzb_grade');
   $('studentGrade').onchange = function(){ localStorage.setItem('uzb_grade', this.value); };
+}
+
+try {
+  const savedList = JSON.parse(localStorage.getItem('uzb_gemini_model_list') || 'null');
+  if (savedList) populateModelSelect(savedList);
+} catch(e){}
+if ($('geminiCustomModel')) $('geminiCustomModel').value = localStorage.getItem('uzb_gemini_custom_model') || '';
+if ($('geminiModel') && localStorage.getItem('uzb_gemini_model')) {
+  $('geminiModel').value = localStorage.getItem('uzb_gemini_model');
+  onModelChange();
 }
 
 addMsg('ai', 'Salom! Hello! Здравствуйте!\nЯ универсальный школьный помощник (1–11 класс).\n1) Загрузите словарь с GitHub и свои учебники.\n2) Выберите свой класс во вкладке «Чат».\n3) Для объяснений от ИИ-учителя добавьте бесплатный ключ Gemini в настройках чата.');
