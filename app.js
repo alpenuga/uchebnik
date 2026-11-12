@@ -454,7 +454,7 @@ function addMsg(role, text){
   $('messages').scrollTop = 1e9;
 }
 
-/* === GEMINI API: АВТОВЫБОР РАБОЧЕЙ МОДЕЛИ === */
+/* === GEMINI API: АВТОВЫБОР МОДЕЛИ + ФОТО ЗАДАЧ И СКАН СТРАНИЦ === */
 const DEFAULT_MODELS = [
   'gemini-3.0-flash',
   'gemini-3-flash-preview',
@@ -462,6 +462,155 @@ const DEFAULT_MODELS = [
   'gemini-2.0-flash-lite',
   'gemini-1.5-flash-latest'
 ];
+
+let pendingChatImage = null; // { base64, mimeType, dataUrl, name }
+
+function setupPhotoUI(){
+  // 1. Кнопка фото и превью в Чате
+  const chatbar = document.querySelector('.chatbar');
+  if (chatbar && !$('chatPhotoBtn')) {
+    const prev = document.createElement('div');
+    prev.id = 'chatPhotoPreview';
+    prev.style.cssText = 'display:none;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);padding:6px 10px;border-radius:10px;margin-bottom:6px;font-size:0.85rem;';
+    chatbar.parentNode.insertBefore(prev, chatbar);
+
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.id = 'chatPhotoInput';
+    inp.accept = 'image/*';
+    inp.hidden = true;
+    inp.onchange = e => e.target.files[0] && attachChatPhoto(e.target.files[0]);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'chatPhotoBtn';
+    btn.className = 'ghost icon';
+    btn.title = 'Сфотографировать задачу или страницу';
+    btn.textContent = '📷';
+    btn.onclick = () => inp.click();
+
+    chatbar.insertBefore(btn, chatbar.firstChild);
+    chatbar.appendChild(inp);
+  }
+
+  // 2. Кнопка распознавания фото страниц во вкладке «Книги»
+  const bookContent = $('bookContent');
+  if (bookContent && !$('ocrPhotoBtn')) {
+    const wrap = document.createElement('div');
+    wrap.className = 'row';
+    wrap.style.marginTop = '6px';
+
+    const ocrInp = document.createElement('input');
+    ocrInp.type = 'file';
+    ocrInp.id = 'ocrPhotoInput';
+    ocrInp.accept = 'image/*';
+    ocrInp.multiple = true;
+    ocrInp.hidden = true;
+    ocrInp.onchange = e => ocrPagesToBook(e.target.files);
+
+    const ocrBtn = document.createElement('button');
+    ocrBtn.type = 'button';
+    ocrBtn.id = 'ocrPhotoBtn';
+    ocrBtn.className = 'ghost';
+    ocrBtn.textContent = '📷 Скан страниц с фото (через Gemini)';
+    ocrBtn.onclick = () => ocrInp.click();
+
+    wrap.appendChild(ocrBtn);
+    wrap.appendChild(ocrInp);
+    bookContent.parentNode.insertBefore(wrap, bookContent.nextSibling);
+  }
+}
+
+function compressImageFile(file, maxSide = 1400, quality = 0.82){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Не удалось прочитать фото'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Повреждённое изображение'));
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxSide || h > maxSide) {
+          if (w > h) { h = Math.round(h * maxSide / w); w = maxSide; }
+          else { w = Math.round(w * maxSide / h); h = maxSide; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve({
+          base64: dataUrl.split(',')[1],
+          mimeType: 'image/jpeg',
+          dataUrl,
+          name: file.name || 'photo.jpg'
+        });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function attachChatPhoto(file){
+  try {
+    showLoad(true, 'Обрабатываю фото…');
+    pendingChatImage = await compressImageFile(file);
+    const prev = $('chatPhotoPreview');
+    if (prev) {
+      prev.style.display = 'flex';
+      prev.innerHTML = `
+        <img src="${pendingChatImage.dataUrl}" style="height:44px;width:44px;object-fit:cover;border-radius:6px">
+        <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📷 Фото прикреплено (нажмите ➤ или допишите вопрос)</div>
+        <button type="button" class="danger" style="padding:4px 8px;font-size:12px" onclick="clearChatPhoto()">×</button>
+      `;
+    }
+    $('userInput').focus();
+  } catch(e) {
+    alert(e.message || e);
+  }
+  showLoad(false);
+  if ($('chatPhotoInput')) $('chatPhotoInput').value = '';
+}
+
+function clearChatPhoto(){
+  pendingChatImage = null;
+  const prev = $('chatPhotoPreview');
+  if (prev) { prev.style.display = 'none'; prev.innerHTML = ''; }
+}
+
+async function ocrPagesToBook(fileList){
+  const files = [...(fileList || [])];
+  if (!files.length) return;
+  const key = (localStorage.getItem('uzb_gemini_key') || ($('geminiKey') && $('geminiKey').value) || '').trim();
+  if (!key) {
+    switchTab('chat');
+    return alert('Для распознавания текста с фото сначала введите бесплатный ключ Gemini во вкладке «Чат» → Настройки Gemini API.');
+  }
+  let added = 0;
+  for (let i = 0; i < files.length; i++) {
+    try {
+      showLoad(true, `Распознаю страницу ${i + 1} из ${files.length}…`);
+      const img = await compressImageFile(files[i], 1600, 0.85);
+      const res = await askGemini(
+        'Извлеки ВЕСЬ текст с этого фото страницы учебника без сокращений. Сохраняй заголовки, номера параграфов (§), задачи и формулы. Не пиши вступлений — выведи только распознанный текст страницы.',
+        { hits: [] }, [], img
+      );
+      if (res && res.text) {
+        $('bookContent').value += ($('bookContent').value ? '\n\n' : '') + res.text.trim();
+        if (!$('bookName').value.trim()) {
+          $('bookName').value = files[i].name.replace(/\.[^.]+$/, '');
+        }
+        added++;
+      }
+    } catch (e) {
+      alert('Ошибка распознавания: ' + (e.message || e));
+      break;
+    }
+  }
+  showLoad(false);
+  if ($('ocrPhotoInput')) $('ocrPhotoInput').value = '';
+  if (added) alert(`Готово! Распознано страниц: ${added}.\nПроверьте текст в поле и нажмите «Добавить».`);
+}
 
 function getDeadModels(){
   try { return new Set(JSON.parse(localStorage.getItem('uzb_dead_models') || '[]')); }
@@ -577,18 +726,24 @@ async function loadGeminiModels(silent){
   }
 }
 
-async function callSingleModel(model, key, systemInstruction, prompt){
+async function callSingleModel(model, key, systemInstruction, prompt, imageObj){
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 22000);
+  const timer = setTimeout(() => ctrl.abort(), 30000);
   try {
+    const userParts = [{ text: prompt }];
+    if (imageObj && imageObj.base64) {
+      userParts.push({
+        inline_data: { mime_type: imageObj.mimeType || 'image/jpeg', data: imageObj.base64 }
+      });
+    }
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: ctrl.signal,
       body: JSON.stringify({
         system_instruction: { parts: [{ text: systemInstruction }] },
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 1200 }
+        contents: [{ role: 'user', parts: userParts }],
+        generationConfig: { temperature: 0.3, maxOutputTokens: 1500 }
       })
     });
     clearTimeout(timer);
@@ -607,7 +762,7 @@ async function callSingleModel(model, key, systemInstruction, prompt){
   }
 }
 
-async function askGemini(query, bookRes, dictHits){
+async function askGemini(query, bookRes, dictHits, imageObj){
   const key = (localStorage.getItem('uzb_gemini_key') || ($('geminiKey') && $('geminiKey').value) || '').trim();
   if (!key) return null;
 
@@ -622,16 +777,16 @@ async function askGemini(query, bookRes, dictHits){
   ).join('\n');
 
   const systemInstruction = mode === 'strict'
-    ? `Ты школьный ИИ-помощник для учащихся в Узбекистане (уровень ученика: ${grade}). Отвечай ТОЛЬКО на основе приведённых фрагментов учебников и словаря. Объясняй понятно для возраста ученика (${grade}). Если ответа в фрагментах нет — прямо скажи об этом. Отвечай на языке вопроса (русский, узбекский или английский).`
+    ? `Ты школьный ИИ-помощник для учащихся в Узбекистане (уровень ученика: ${grade}). Отвечай на основе приведённых фрагментов учебников, словаря и прикреплённого фото. Объясняй понятно для возраста ученика (${grade}). Отвечай на языке вопроса (русский, узбекский или английский).`
     : `Ты добрый, понятный и опытный школьный учитель в Узбекистане (программа 1–11 классов). Сейчас тебе задаёт вопрос ученик уровня: ${grade}.
 Правила:
-1. В первую очередь опирайся на приведённые фрагменты учебников и словаря из базы ученика (указывай источник).
-2. Объясняй простыми словами и по шагам, адаптируя сложность под ${grade}.
-3. Если фрагментов из базы нет или их мало — дай правильное объяснение или решение по школьной программе Узбекистана для уровня «${grade}» и пометь, что это решение от ИИ-учителя.
+1. Если прикреплено фото страницы учебника, тетради или задачи — внимательно прочитай текст и формулы на фото, реши задание по шагам и объясни тему.
+2. Опирайся на фрагменты учебников и словаря из базы ученика (если они найдены).
+3. Объясняй простыми словами и по шагам, адаптируя сложность под ${grade}.
 4. Отвечай на языке вопроса ученика (русский, oʻzbek tili или English).
 5. Оформляй формулы читаемо: используй символы ², ³, √, ⇒, ≤, ≥, ≠, ∞, π, индексы в химии (H₂SO₄, CO₂) и верхний регистр для римских цифр веков (XIV век).`;
 
-  const prompt = `Контекст из базы ученика:\n${ctxDict ? ctxDict + '\n\n' : ''}${ctxBooks || 'Точных цитат в загруженных книгах не найдено.'}\n\nВопрос ученика (${grade}): ${query}`;
+  const prompt = `Контекст из базы ученика:\n${ctxDict ? ctxDict + '\n\n' : ''}${ctxBooks || 'Точных цитат в загруженных книгах не найдено.'}\n\nВопрос/задание ученика (${grade}): ${query}`;
 
   const chosen = getSelectedModel();
   const dead = getDeadModels();
@@ -655,9 +810,9 @@ async function askGemini(query, bookRes, dictHits){
   let lastError = 'Не удалось подобрать модель';
   for (let i = 0; i < queue.length; i++) {
     const m = queue[i];
-    showLoad(true, `Спрашиваю ${m}…`);
+    showLoad(true, imageObj ? `Анализирую фото (${m})…` : `Спрашиваю ${m}…`);
     try {
-      const text = await callSingleModel(m, key, systemInstruction, prompt);
+      const text = await callSingleModel(m, key, systemInstruction, prompt, imageObj);
       if (text) {
         localStorage.setItem('uzb_last_good_model', m);
         populateModelSelect(JSON.parse(localStorage.getItem('uzb_gemini_model_list') || 'null'));
@@ -686,20 +841,32 @@ async function askGemini(query, bookRes, dictHits){
 }
 
 async function sendMessage(){
-  const q = $('userInput').value.trim();
-  if (!q) return;
+  const rawQ = $('userInput').value.trim();
+  const imgObj = pendingChatImage;
+  if (!rawQ && !imgObj) return;
+
+  const q = rawQ || 'Прочитай задание на фото и разбери решение по шагам (если это страница учебника — кратко объясни тему).';
   $('userInput').value = '';
-  addMsg('user', q);
-  showLoad(true, 'Ищу в базе и формирую ответ…');
+  clearChatPhoto();
+
+  addMsg('user', rawQ || '📷 Фото задания');
+  if (imgObj) {
+    const lastUserMsg = $('messages').lastElementChild;
+    if (lastUserMsg) {
+      lastUserMsg.innerHTML = `<img src="${imgObj.dataUrl}" style="max-width:210px;max-height:210px;border-radius:10px;display:block;margin-bottom:6px;margin-left:auto">` + lastUserMsg.innerHTML;
+    }
+  }
+
+  showLoad(true, imgObj ? 'Читаю фото…' : 'Ищу в базе и формирую ответ…');
   try {
     const sub = $('chatSubject').value;
-    const bookRes = await searchBooks(q, sub);
-    const dictHits = $('useDict').checked ? await searchDicts(q, sub) : [];
+    const bookRes = rawQ ? await searchBooks(rawQ, sub) : { hits: [], totalBooks: 0, allBooks: (await getBooks()).length };
+    const dictHits = (rawQ && $('useDict').checked) ? await searchDicts(rawQ, sub) : [];
 
     let answered = false;
-    if ($('useGemini') && $('useGemini').checked && navigator.onLine) {
+    if ((imgObj || ($('useGemini') && $('useGemini').checked)) && navigator.onLine) {
       try {
-        const res = await askGemini(q, bookRes, dictHits);
+        const res = await askGemini(q, bookRes, dictHits, imgObj);
         if (res && res.text) {
           const srcNames = [...new Set(bookRes.hits.map(h => h.book))];
           const footer = srcNames.length ? `\n\n📚 Источники из базы: ${srcNames.join(', ')}` : '';
@@ -707,12 +874,13 @@ async function sendMessage(){
           answered = true;
         }
       } catch (ge) {
-        addMsg('ai', '⚠️ Gemini недоступен (' + (ge.message || ge) + '). Показываю офлайн-ответ из вашей базы:');
+        addMsg('ai', '⚠️ Gemini недоступен (' + (ge.message || ge) + ').' + (imgObj ? '' : ' Показываю офлайн-ответ из вашей базы:'));
       }
     }
-    if (!answered) addMsg('ai', smartAnswer(q, bookRes, dictHits));
+    if (!answered && !imgObj) addMsg('ai', smartAnswer(q, bookRes, dictHits));
+    else if (!answered && imgObj) addMsg('ai', 'Для анализа фото нужен интернет и сохранённый API-ключ Gemini в настройках чата.');
   } catch(e) {
-    addMsg('ai', 'Ошибка поиска: ' + (e.message||e));
+    addMsg('ai', 'Ошибка: ' + (e.message||e));
   }
   showLoad(false);
 }
@@ -779,13 +947,13 @@ async function extractPdf(file){
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   let text = '';
-  const max = Math.min(pdf.numPages, 120);
+  const max = Math.min(pdf.numPages, 400);
   for (let i=1;i<=max;i++){
     const page = await pdf.getPage(i);
     const c = await page.getTextContent();
     text += c.items.map(it => it.str).join(' ') + '\n\n';
   }
-  if (text.replace(/\s/g,'').length < 40) throw new Error('В PDF почти нет текста (возможно скан).');
+  if (text.replace(/\s/g,'').length < 40) throw new Error('В PDF почти нет текста (это скан). Используйте кнопку «📷 Скан страниц с фото»!');
   return text;
 }
 async function importPayload(data, mergeAsk){
@@ -1007,6 +1175,7 @@ function setupPWA(){
 initTheme();
 fillSelects();
 setupPWA();
+setupPhotoUI();
 renderBooks();
 fillCardBooks();
 renderDicts(true);
@@ -1023,7 +1192,7 @@ try {
 } catch(e){ populateModelSelect(null); }
 if ($('geminiCustomModel')) $('geminiCustomModel').value = localStorage.getItem('uzb_gemini_custom_model') || '';
 
-addMsg('ai', 'Salom! Hello! Здравствуйте!\nЯ универсальный школьный помощник (1–11 класс).\n1) Загрузите словарь с GitHub и свои учебники.\n2) Выберите свой класс во вкладке «Чат».\n3) Для объяснений от ИИ-учителя добавьте бесплатный ключ Gemini в настройках чата (модель подберётся автоматически).');
+addMsg('ai', 'Salom! Hello! Здравствуйте!\nЯ универсальный школьный помощник (1–11 класс).\n1) Загрузите словарь с GitHub и свои учебники (можно сканировать страницы кнопкой 📷).\n2) Выберите свой класс во вкладке «Чат».\n3) Пишите вопросы или нажимайте 📷, чтобы сфотографировать задачу!');
 
 $('tabLibBtn').onclick = () => switchTab('lib');
 $('tabDictBtn').onclick = () => switchTab('dict');
