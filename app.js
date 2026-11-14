@@ -26,7 +26,7 @@ const LANGS = [
 
 const STOP_RAW = (
   'и в на с по для не что это как а но или из к о от до за при про так же ' +
-  'бы ли уже только ещё еще его её их мы вы они он она оно я ты этот эта ' +
+  'бы ли уже только ещё еще его её их мы вы они он ona оно я ты этот эта ' +
   'эти тот та те весь вся все быть был была было есть будет можно нужно ' +
   'также если когда чтобы который которая которые the a an of to in is are ' +
   'was were be been being have has had do does did will would could should ' +
@@ -64,7 +64,7 @@ function langName(id){ return (LANGS.find(s=>s.id===id)||{}).name || id; }
 
 function escapeHtml(s){
   const map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
-  return String(s).replace(/[&<>"']/g, m => map[m]);
+  return String(s || '').replace(/[&<>"']/g, m => map[m]);
 }
 
 function fold(s){
@@ -145,15 +145,15 @@ function fillSelects(){
   const subOpts = SUBJECTS.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
   const subNoAll = SUBJECTS.filter(s=>s.id!=='all').map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   const langOpts = LANGS.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
-  $('subject').innerHTML = subNoAll;
-  $('filterSubject').innerHTML = subOpts;
-  $('chatSubject').innerHTML = subOpts;
-  $('cardSubject').innerHTML = subOpts;
-  $('dictSubject').innerHTML = subNoAll;
-  $('dictSubject').value = 'vocab';
-  $('dictLang').innerHTML = langOpts;
-  $('dictFilterLang').innerHTML = `<option value="all">Все языки</option>` + langOpts;
-  $('dictFilterSubject').innerHTML = subOpts;
+  if ($('subject')) $('subject').innerHTML = subNoAll;
+  if ($('filterSubject')) $('filterSubject').innerHTML = subOpts;
+  if ($('chatSubject')) $('chatSubject').innerHTML = subOpts;
+  if ($('cardSubject')) $('cardSubject').innerHTML = subOpts;
+  if ($('dictSubject')) $('dictSubject').innerHTML = subNoAll;
+  if ($('dictSubject')) $('dictSubject').value = 'vocab';
+  if ($('dictLang')) $('dictLang').innerHTML = langOpts;
+  if ($('dictFilterLang')) $('dictFilterLang').innerHTML = `<option value="all">Все языки</option>` + langOpts;
+  if ($('dictFilterSubject')) $('dictFilterSubject').innerHTML = subOpts;
 }
 
 function openDB(){
@@ -257,17 +257,29 @@ async function deleteDict(id){
   renderDicts(true);
 }
 
-/* === ОЧИСТКА ТЕКСТА JSON/OCR И РАЗБИВКА НА КАРТОЧКИ БЕЗ РАЗРЫВА ТАБЛИЦ === */
+/* === УЛУЧШЕННАЯ ОЧИСТКА И РАЗБИВКА НА КАРТОЧКИ (ФИКС АРТЕФАКТОВ) === */
 function cleanBookContent(rawText){
   if (!rawText) return '';
-  return String(rawText)
+  let s = String(rawText)
     .replace(/\r\n/g, '\n')
     .replace(/\\r\\n/g, '\n')
     .replace(/\\n/g, '\n')
     .replace(/\\t/g, ' ')
     .replace(/\\"/g, '"')
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&amp;/g, '&');
+
+  // Убираем утекший HTML-мусор со стилями/тегами ячеек таблиц
+  s = s.replace(/<td\s+[^>]*?>/gi, ' ');
+  s = s.replace(/<\/td>/gi, ' ');
+  s = s.replace(/<span\s+[^>]*?>/gi, '');
+  s = s.replace(/<\/span>/gi, '');
+  s = s.replace(/<div\s+[^>]*?>/gi, '');
+  s = s.replace(/<\/div>/gi, '');
+
+  return s
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFD]/g, '')
-    .replace(/^\s*[{}\[\]]+\s*$/gm, '')
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -277,7 +289,6 @@ function splitIntoCards(content){
   let raw = cleanBookContent(content);
   if (!raw) return [];
 
-  // Схлопываем переносы внутри HTML-таблиц, чтобы таблица не рвалась пополам
   raw = raw.replace(/<table[\s\S]*?<\/table>/gi, m => m.replace(/\s*\n\s*/g, ' '));
 
   const rx = /(?=\n\s*(?:§+|параграф|глава|bob|mavzu|mavzusi|unit|chapter|paragraph)\s*[\d.IVXLCivxlc]+)/i;
@@ -289,7 +300,6 @@ function splitIntoCards(content){
     b = b.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
     if (b.length < 40) continue;
     if (b.length > 1300) {
-      // Делим по абзацам или перед новым номером задачи (но НЕ после "11.")
       const parts = b.split(/\n{2,}|(?<!\b\d+)(?<=[.!?])\s+(?=[А-ЯA-Z§\[])|(?=\n\d+\.\s)/);
       let buf = '';
       for (const s of parts) {
@@ -449,21 +459,13 @@ function smartAnswer(query, bookRes, dictHits){
 }
 
 function restoreSafeHtml(s){
-  // 1. Возвращаем иконки и спецсимволы HTML (&#8987;, &#128214;, &nbsp; и др.)
   s = s.replace(/&amp;(#\d+|#x[0-9a-fA-F]+|[a-zA-Z0-9]+);/g, '&$1;');
-
-  // 2. Разрешаем безопасные теги таблиц и оформления из учебника
   const tags = 'table|thead|tbody|tr|td|th|span|b|strong|i|em|u|sub|sup|br|hr|p|div';
   const rxOpen = new RegExp(`&lt;(/?(?:${tags})(?:\\s+[^&]*?)?)&gt;`, 'gi');
   s = s.replace(rxOpen, (_, inner) => {
-    const clean = inner
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/on\w+\s*=/gi, 'data-x=');
+    const clean = inner.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/on\w+\s*=/gi, 'data-x=');
     return `<${clean}>`;
   });
-
-  // 3. Если карточка началась с <tr> или <td> без <table>, оборачиваем в таблицу
   if (/<(?:tr|td)\b/i.test(s) && !/<table\b/i.test(s)) {
     s = `<div class="table-wrap"><table class="school-table">${s}</table></div>`;
   } else if (/<\/table>/i.test(s) && !/<table\b/i.test(s)) {
@@ -472,29 +474,31 @@ function restoreSafeHtml(s){
   return s;
 }
 
+/* === УЛУЧШЕННЫЙ КОНВЕРТЕР LATEX И УСТРАНЕНИЕ ОШИБОК ОТРЕНДЕРИНГА === */
 function convertLatexMath(s){
-  // 1. Запятая в десятичных дробях LaTeX: 0{,}04 -> 0,04 и проценты \% -> %
+  if (!s) return '';
   s = s.replace(/\{,\}/g, ',').replace(/\\%/g, '%');
 
-  // 2. Системы уравнений и неравенств \begin{cases} ... \end{cases}
+  // Исправление сломанных конструкций вроде 3left( или \left(
+  s = s.replace(/\d+left\(/g, '(')
+       .replace(/\\left\(/g, '(').replace(/\\right\)/g, ')')
+       .replace(/\\left\[/g, '[').replace(/\\right\]/g, ']');
+
+  // Системы уравнений
   s = s.replace(/\\begin\{cases\}([\s\S]*?)\\end\{cases\}/g, (_, body) => {
-    const rows = body
-      .split(/\\\\/)
-      .map(r => r.replace(/&amp;|&/g, ' ').trim())
-      .filter(Boolean)
-      .map(r => `<div class="case-row">${r}</div>`)
-      .join('');
+    const rows = body.split(/\\\\/).map(r => r.replace(/&amp;|&/g, ' ').trim()).filter(Boolean)
+      .map(r => `<div class="case-row">${r}</div>`).join('');
     return `<span class="math-cases"><span class="case-brace"></span><span class="case-body">${rows}</span></span>`;
   });
 
-  // 3. Настоящие двухэтажные дроби \frac{a}{b} и \dfrac{a}{b}
+  // Дроби
   for (let i = 0; i < 2; i++) {
     s = s.replace(/\\d?frac\{([^{}]+)\}\{([^{}]+)\}/g,
       '<span class="frac"><span class="num">$1</span><span class="den">$2</span></span>'
     );
   }
 
-  // 4. Корни \sqrt[n]{x} и \sqrt{x} с верхней чертой над подкоренным выражением
+  // Корни
   for (let i = 0; i < 2; i++) {
     s = s.replace(/\\sqrt\[([^{}\]]+)\]\{([^{}]+)\}/g,
       '<span class="sqrt"><sup>$1</sup>√<span class="rad">$2</span></span>'
@@ -505,11 +509,9 @@ function convertLatexMath(s){
   }
   s = s.replace(/\\sqrt\s*([a-zA-Z0-9]+)/g, '<span class="sqrt">√<span class="rad">$1</span></span>');
 
-  // 5. Стрелки, знаки сравнения, геометрия и греческие буквы
   return s
     .replace(/\\(?:implies|Rightarrow|Longrightarrow)/g, ' ⇒ ')
     .replace(/\\(?:iff|Leftrightarrow|Longleftrightarrow)/g, ' ⇔ ')
-    .replace(/\\(?:rightarrows|rightleftarrows|leftrightarrow)/g, ' ⇄ ')
     .replace(/\\(?:to|rightarrow|longrightarrow)/g, ' → ')
     .replace(/\\uparrow/g, '↑').replace(/\\downarrow/g, '↓')
     .replace(/\\infty/g, '∞')
@@ -532,9 +534,11 @@ function convertLatexMath(s){
     .replace(/\\pi\b/g, 'π').replace(/\\rho/g, 'ρ').replace(/\\lambda/g, 'λ')
     .replace(/\\mu/g, 'μ').replace(/\\Omega/g, 'Ω').replace(/\\omega/g, 'ω')
     .replace(/\\(?:phi|varphi)/g, 'φ')
-    .replace(/\\(?:text|mathrm|mathbf|mathit)\{([^{}]+)\}/g, '$1')
-    .replace(/\\(?:left|right)([()[\]|])/g, '$1')
-    .replace(/\\(?:left|right)\\\{/g, '{').replace(/\\(?:left|right)\\\}/g, '}')
+    .replace(/\\ext\{([^{}]+)\}/g, '$1')
+    .replace(/\\(?:text|mathrm|www|mathbf|mathit)\{([^{}]+)\}/g, '$1')
+    .replace(/\\?blacktriangle/g, '▲')
+    .replace(/\\?riangle/g, '▶')
+    .replace(/\b(begincases|endcases)\b/g, '')
     .replace(/\\(?:quad|qquad)/g, '   ')
     .replace(/\\[,;!]/g, ' ');
 }
@@ -560,56 +564,41 @@ function renderMarkdownTables(s){
 function formatSchoolText(raw){
   let s = escapeHtml(cleanBookContent(raw));
 
-  // 1. Восстанавливаем HTML-таблицы и спецсимволы (&#8987; и т.д.)
   s = restoreSafeHtml(s);
-
-  // 2. Убираем висячие "---" и оборванные номера задач в самом конце карточки
   s = s.replace(/\s*---+\s*$/gm, '');
   s = s.replace(/([.!?])\s+\d{1,3}\.\s*$/, '$1');
 
-  // 3. Переводим команды LaTeX (системы, дроби, корни, знаки)
   s = convertLatexMath(s);
   s = convertLatexMath(s);
-
-  // 4. Собираем Markdown-таблицы из "| x | -4 | -3 |..."
   s = renderMarkdownTables(s);
 
-  // 5. Блочные формулы $$...$$ и \[...\]
   s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, m) => `<div class="math-block">${m.trim()}</div>`);
   s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `<div class="math-block">${m.trim()}</div>`);
 
-  // 6. Строчные формулы $...$ и \(...\)
   const fmtInline = (_, m) => {
     const body = m.replace(/-(?=[0-9a-zA-Zа-яА-Я(<])/g, '−').trim();
-    return `<span class="math-inline">${body}</span>`;
+    return `<span class="math-inline">${convertLatexMath(body)}</span>`;
   };
   s = s.replace(/\$([^$]+?)\$/g, fmtInline);
   s = s.replace(/\\\(([^\n]+?)\\\)/g, fmtInline);
 
-  // 7. Верхние и нижние индексы: x^{2}, x^2, x_{1}, x_1
   s = s.replace(/\^\{([^{}\n]+)\}/g, '<sup>$1</sup>');
   s = s.replace(/_\{([^{}\n]+)\}/g, '<sub>$1</sub>');
   s = s.replace(/\^([+\-]?\d+|[a-zA-Z])/g, '<sup>$1</sup>');
   s = s.replace(/([a-zA-Zа-яА-Я0-9)])_(\d+|[a-zA-Z])/g, '$1<sub>$2</sub>');
 
-  // 8. Химические формулы (H2O, H2SO4, CO2, Ca(OH)2, Fe2O3, C6H12O6)
   s = s.replace(/\b((?:[A-Z][a-z]?|\([A-Za-z0-9]+\))\d+)+([A-Z][a-z]?)?\b/g, match =>
     match.replace(/([A-Z][a-z]?|\))(\d+)/g, '$1<sub>$2</sub>')
   );
 
-  // 9. Римские цифры для веков по истории (xiv век -> XIV век)
   s = s.replace(/\b([ivxlcdm]{1,7})(\s*(?:[–\-]\s*[ivxlcdm]{1,7})?\s*(?:в\.|вв\.|век|asr|century))/gi,
     (_, rom, tail) => rom.toUpperCase() + tail
   );
 
-  // 10. Подписи к рисункам [Рисунок 1: ...] и определения в [квадратных скобках]
   s = s.replace(/\[\s*((?:Рисунок|Рис\.|Rasm|Таблица|Chizma)[^\]]*)\]/gi, '<div class="fig-badge">🖼️ $1</div>');
   s = s.replace(/\[([^\[\]]{20,})\]/g, '<div class="rule-box">📌 $1</div>');
-
-  // 11. Пункты списков 1) 2) 3) с новой строки
   s = s.replace(/([.!?:])\s+(\d+\)\s+)/g, '$1<div class="step-item"><b>$2</b></div>');
 
-  // 12. Markdown: заголовки, линии, жирный, курсив, очистка одиночных "**"
   s = s.replace(/^\s*---+\s*$/gm, '<hr class="ai-hr">');
   s = s.replace(/^#{1,4}\s+(.+)$/gm, '<div class="ai-h">$1</div>');
   s = s.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
@@ -1282,7 +1271,6 @@ async function loadDictsFromGitHub(){
   showLoad(false);
 }
 
-/* === ПОДСВЕТКА ПОИСКА ПОВЕРХ КРАСИВЫХ ФОРМУЛ И ТАБЛИЦ === */
 function highlight(text, q){
   let html = formatSchoolText(text);
   const words = fold(q).split(/\s+/).filter(w => w.length > 2);
