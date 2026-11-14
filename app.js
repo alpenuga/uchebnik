@@ -329,11 +329,12 @@ function cardTitle(text){
     .replace(/&[a-zA-Z0-9#]+;/g, ' ')
     .replace(/^\s*---+\s*/gm, '')
     .replace(/\[\s*(?:Рисунок|Рис\.|Rasm|Таблица|Chizma)[^\]]*\]/gi, '')
+    .replace(/\$+/g, '')
     .replace(/["'`{}\[\]\\]+/g, '')
     .replace(/^[*#_\-–—•·:;,.!?]+\s*/, '')
     .replace(/\s+/g, ' ')
     .trim();
-  const rx = /^((?:§+\s*[\d.]+|параграф\s*[\d.]+|глава\s*[\d.]+|bob\s*[\d.]+|mavzu\s*[\d.]+|unit\s*[\d.]+|chapter\s*[\d.]+)\s*(?:[А-ЯA-ZЁЎҚҒҲ0-9$:+=^_\-\s]{2,55})?)/i;
+  const rx = /^((?:§+\s*[\d.]+|параграф\s*[\d.]+|глава\s*[\d.]+|bob\s*[\d.]+|mavzu\s*[\d.]+|unit\s*[\d.]+|chapter\s*[\d.]+)\s*(?:[А-ЯA-ZЁЎҚҒҲ0-9:+=^_\-\s]{2,55})?)/i;
   const m = clean.match(rx);
   if (m) {
     const titlePart = m[1].replace(/\s+[А-ЯЁA-Z][а-яёa-z]+$/, '').trim();
