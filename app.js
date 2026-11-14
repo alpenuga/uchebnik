@@ -605,6 +605,7 @@ function formatSchoolText(raw){
     return `<span class="math-inline">${convertLatexMath(body)}</span>`;
   };
   s = s.replace(/\$([^$]+?)\$/g, fmtInline);
+  s = s.replace(/\$/g, '');
   s = s.replace(/\\\(([^\n]+?)\\\)/g, fmtInline);
 
   // 7. Верхние и нижние индексы: x^{2}, x^2, x_{1}, x_1
