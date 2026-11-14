@@ -266,9 +266,14 @@ function cleanBookContent(rawText){
     .replace(/\\n/g, '\n')
     .replace(/\\t/g, ' ')
     .replace(/\\"/g, '"')
+    // Исправление HTML-сущностей и текстовых артефактов gt; / lt;
     .replace(/&gt;/g, '>')
     .replace(/&lt;/g, '<')
-    .replace(/&amp;/g, '&');
+    .replace(/&amp;/g, '&')
+    .replace(/\bgt;\b/g, '>')
+    .replace(/\blt;\b/g, '<')
+    .replace(/(\s)gt;(\s|$)/g, '$1> $2')
+    .replace(/(\s)lt;(\s|$)/g, '$1< $2');
 
   // Превращаем разорванные <td ...> без <table> и <tr> в аккуратный список условных знаков
   if (/<td\b/i.test(s) && !/<tr\b/i.test(s)) {
