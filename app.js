@@ -210,30 +210,52 @@ async function deleteDict(id){
   renderDicts(true);
 }
 
+/* === РАЗБИВКА НА КАРТОЧКИ С СОХРАНЕНИЕМ АБЗАЦЕВ И ТАБЛИЦ === */
 function splitIntoCards(content){
   const raw = (content||'').replace(/\r\n/g,'\n').trim();
   if (!raw) return [];
-  let blocks = raw.split(/(?=\n(?:§+|параграф|глава|bob|mavzu|mavzusi|unit|chapter|paragraph)\s*[\d.IVXLCivxlc]+)/i);
+  let blocks = raw.split(/(?=\n\s*(?:§+|параграф|глава|bob|mavzu|mavzusi|unit|chapter|paragraph)\s*[\d.IVXLCivxlc]+)/i);
   if (blocks.length < 3) blocks = raw.split(/\n\s*\n+/);
   const out = [];
   for (let b of blocks) {
-    b = b.replace(/\s+/g,' ').trim();
-    if (b.length < 50) continue;
-    if (b.length > 900) {
-      const sentences = b.split(/(?<=[.!?])\s+/);
+    // Убираем лишние пробелы, но сохраняем переносы строк \n для таблиц и списков
+    b = b.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    if (b.length < 40) continue;
+    if (b.length > 1200) {
+      const parts = b.split(/(?<=[.!?])\s+(?=[А-ЯA-Z0-9§\[])/);
       let buf = '';
-      for (const s of sentences) {
-        if ((buf + ' ' + s).length > 720 && buf.length > 80) { out.push(buf.trim()); buf = s; }
-        else buf += (buf ? ' ' : '') + s;
+      for (const s of parts) {
+        const isTableLine = s.includes('|') && buf.includes('|');
+        if (!isTableLine && (buf + ' ' + s).length > 950 && buf.length > 120) {
+          out.push(buf.trim());
+          buf = s;
+        } else {
+          buf += (buf ? ' ' : '') + s;
+        }
       }
-      if (buf.trim().length > 50) out.push(buf.trim());
-    } else out.push(b);
+      if (buf.trim().length > 40) out.push(buf.trim());
+    } else {
+      out.push(b);
+    }
   }
   return out;
 }
+
 function cardTitle(text){
-  const m = text.match(/^(§+\s*[\d.]+|параграф\s*[\d.]+|глава\s*[\d.]+|bob\s*[\d.]+|mavzu\s*[\d.]+|unit\s*[\d.]+|chapter\s*[\d.]+)[^\s]*/i);
-  return m ? m[0].slice(0, 80) : text.slice(0, 70) + (text.length > 70 ? '…' : '');
+  const clean = (text||'')
+    .replace(/^\s*---+\s*/gm, '')
+    .replace(/\[\s*(?:Рисунок|Рис\.|Rasm|Таблица|Chizma)[^\]]*\]/gi, '')
+    .trim();
+  // Если начинается с §, берём номер параграфа и заголовок темы (включая формулу)
+  const m = clean.match(/^((?:§+\s*[\d.]+|параграф\s*[\d.]+|глава\s*[\d.]+|bob\s*[\d.]+|mavzu\s*[\d.]+|unit\s*[\d.]+|chapter\s*[\d.]+)\s*(?:[А-ЯA-ZЁЎҚҒҲ0-9$:+=^_\-\s]{2,55})?)/i);
+  if (m) {
+    // Отсекаем случайное первое слово следующего предложения с маленькой буквы
+    const titlePart = m[1].replace(/\s+[А-ЯЁA-Z][а-яёa-z]+$/, '').trim();
+    return titlePart.slice(0, 85);
+  }
+  const firstLine = clean.split(/\n+/)[0].trim();
+  const firstSent = firstLine.split(/(?<=[.!?])\s+/)[0];
+  return firstSent.slice(0, 75) + (firstSent.length > 75 ? '…' : '');
 }
 
 function scoreText(query, text, extra){
@@ -272,7 +294,7 @@ async function searchBooks(query, subject){
   pool.forEach(book => {
     splitIntoCards(book.content).forEach(ch => {
       const s = scoreChunk(query, ch, book);
-      if (s > 0.35) scored.push({ score:s, text: ch.slice(0, 750), book: book.name, subject: book.subject });
+      if (s > 0.35) scored.push({ score:s, text: ch.slice(0, 850), book: book.name, subject: book.subject });
     });
   });
   scored.sort((a,b)=>b.score-a.score);
@@ -332,7 +354,7 @@ function smartAnswer(query, bookRes, dictHits){
   });
   Object.keys(by).forEach(k => {
     out += '📘 ' + k + '\n';
-    by[k].forEach(t => { out += t + (t.length>=750?'…':'') + '\n\n'; });
+    by[k].forEach(t => { out += t + (t.length>=850?'…':'') + '\n\n'; });
   });
   const first = bookRes.hits[0].text;
   const brief = first.split(/(?<=[.!?])\s+/).slice(0, 2).join(' ');
@@ -341,24 +363,49 @@ function smartAnswer(query, bookRes, dictHits){
   return out;
 }
 
-/* === КРАСИВОЕ ОФОРМЛЕНИЕ ФОРМУЛ, СТЕПЕНЕЙ, ХИМИИ И ИСТОРИИ === */
+/* === КРАСИВОЕ ОФОРМЛЕНИЕ ФОРМУЛ, ТАБЛИЦ, ПРАВИЛ И РИСУНКОВ === */
 (function injectMathStyles(){
-  if (document.getElementById('schoolMathStyles')) return;
+  const old = document.getElementById('schoolMathStyles');
+  if (old) old.remove();
   const st = document.createElement('style');
   st.id = 'schoolMathStyles';
   st.textContent = `
-    .msg { line-height: 1.55; }
-    .msg sup { font-size: 0.72em; vertical-align: super; line-height: 0; font-weight: 600; }
-    .msg sub { font-size: 0.72em; vertical-align: sub; line-height: 0; font-weight: 600; }
-    .msg .ai-h { font-weight: 800; color: var(--green); font-size: 1.03em; margin: 8px 0 2px; }
-    .msg .ai-hr { border: 0; border-top: 1px dashed var(--line); margin: 8px 0; }
-    .msg .math-block {
+    .msg, .pcard .body, .pcard .ttl, .dcard { line-height: 1.6; }
+    .pcard .body { white-space: normal; }
+    .msg sup, .pcard sup, .dcard sup { font-size: 0.72em; vertical-align: super; line-height: 0; font-weight: 700; }
+    .msg sub, .pcard sub, .dcard sub { font-size: 0.72em; vertical-align: sub; line-height: 0; font-weight: 700; }
+    .ai-h { font-weight: 800; color: var(--green); font-size: 1.04em; margin: 8px 0 4px; }
+    .ai-hr { border: 0; border-top: 1px dashed var(--line); margin: 8px 0; }
+    .math-block {
       background: var(--card); border-left: 3px solid var(--green);
-      padding: 6px 10px; margin: 6px 0; border-radius: 8px;
-      font-weight: 700; overflow-x: auto;
+      padding: 8px 12px; margin: 8px 0; border-radius: 8px;
+      font-weight: 700; overflow-x: auto; text-align: center;
     }
-    .msg .math-inline { font-weight: 700; padding: 0 2px; }
-    .msg code { background: var(--card); padding: 1px 5px; border-radius: 5px; font-size: 0.9em; }
+    .math-inline {
+      font-family: 'Cambria Math', 'Times New Roman', serif;
+      font-weight: 700; font-size: 1.04em; padding: 0 2px; white-space: nowrap;
+    }
+    .rule-box {
+      background: rgba(46, 125, 50, 0.12);
+      border-left: 4px solid var(--green);
+      padding: 8px 12px; margin: 8px 0; border-radius: 8px;
+      font-weight: 500;
+    }
+    .fig-badge {
+      display: inline-block; background: var(--card); border: 1px solid var(--line);
+      padding: 4px 10px; margin: 6px 0; border-radius: 8px; font-size: 0.88em; opacity: 0.9;
+    }
+    .table-wrap { overflow-x: auto; margin: 8px 0; }
+    .school-table {
+      border-collapse: collapse; width: 100%; font-size: 0.92em;
+      background: var(--card); border-radius: 8px; overflow: hidden;
+    }
+    .school-table th, .school-table td {
+      border: 1px solid var(--line); padding: 5px 8px; text-align: center;
+    }
+    .school-table tr:first-child { background: rgba(46, 125, 50, 0.15); font-weight: 700; }
+    .step-item { margin-top: 5px; }
+    .msg code, .pcard code { background: var(--card); padding: 1px 5px; border-radius: 5px; font-size: 0.9em; }
   `;
   document.head.appendChild(st);
 })();
@@ -366,8 +413,7 @@ function smartAnswer(query, bookRes, dictHits){
 function convertLatexMath(s){
   return s
     // Дроби и корни
-    .replace(/\\dfrac\{([^{}]+)\}\{([^{}]+)\}/g, '($1)/($2)')
-    .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '($1)/($2)')
+    .replace(/\\d?frac\{([^{}]+)\}\{([^{}]+)\}/g, '($1)/($2)')
     .replace(/\\sqrt\[([^{}\]]+)\]\{([^{}]+)\}/g, '<sup>$1</sup>√($2)')
     .replace(/\\sqrt\{([^{}]+)\}/g, '√($1)')
     .replace(/\\sqrt\s*([a-zA-Z0-9]+)/g, '√$1')
@@ -399,49 +445,85 @@ function convertLatexMath(s){
     .replace(/\\pi\b/g, 'π').replace(/\\rho/g, 'ρ').replace(/\\lambda/g, 'λ')
     .replace(/\\mu/g, 'μ').replace(/\\Omega/g, 'Ω').replace(/\\omega/g, 'ω')
     .replace(/\\(?:phi|varphi)/g, 'φ')
-    // Очистка служебных тегов LaTeX
+    // Очистка служебных тегов и отступов LaTeX (\quad, \qquad и т.д.)
     .replace(/\\(?:text|mathrm|mathbf|mathit)\{([^{}]+)\}/g, '$1')
     .replace(/\\(?:left|right)([()[\]|])/g, '$1')
-    .replace(/\\(?:quad|qquad|,|;|!)/g, ' ');
+    .replace(/\\(?:quad|qquad)/g, '   ')
+    .replace(/\\[,;!]/g, ' ');
+}
+
+function renderMarkdownTables(s){
+  // 1. Отделяем начало таблицы от текста после двоеточия или точки
+  s = s.replace(/([:.])\s+(\|[^\n]+\|)/g, '$1\n$2');
+  // 2. Разделяем склеенные в одну строку ряды таблицы "| |"
+  s = s.replace(/\|\s+\|(?=\s*(?::?-+:?|\$|[a-zA-Zа-яА-Я0-9\-]))/g, '|\n|');
+  // 3. Отделяем обычный текст после последней ячейки таблицы
+  s = s.replace(/^(\s*\|(?:[^|\n]+\|)+)\s+([^|\n]+)$/gm, '$1\n$2');
+
+  return s.replace(/((?:^\s*\|[^\n]+\|\s*(?:\n|$)){2,})/gm, block => {
+    const rows = block.trim().split('\n').map(r => r.trim()).filter(Boolean);
+    const htmlRows = [];
+    for (const r of rows) {
+      const cells = r.replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      if (cells.every(c => /^:?-{2,}:?$/.test(c))) continue;
+      htmlRows.push('<tr>' + cells.map(c => `<td>${c}</td>`).join('') + '</tr>');
+    }
+    if (!htmlRows.length) return block;
+    return `<div class="table-wrap"><table class="school-table">${htmlRows.join('')}</table></div>`;
+  });
 }
 
 function formatSchoolText(raw){
   let s = escapeHtml(raw || '');
 
-  // 1. Переводим команды LaTeX в красивые символы
-  s = convertLatexMath(s);
-  s = convertLatexMath(s); // повтор для вложенных скобок
+  // 1. Убираем висячие "---" в конце карточек
+  s = s.replace(/\s*---+\s*$/gm, '');
 
-  // 2. Блочные формулы $$...$$ и \[...\]
+  // 2. Переводим команды LaTeX в красивые символы
+  s = convertLatexMath(s);
+  s = convertLatexMath(s);
+
+  // 3. Собираем таблицы из "| x | -4 | -3 |..."
+  s = renderMarkdownTables(s);
+
+  // 4. Блочные формулы $$...$$ и \[...\]
   s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, m) => `<div class="math-block">${m.trim()}</div>`);
   s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `<div class="math-block">${m.trim()}</div>`);
 
-  // 3. Строчные формулы $...$ и \(...\)
-  s = s.replace(/\$([^\n$]+?)\$/g, (_, m) => `<span class="math-inline">${m.trim()}</span>`);
-  s = s.replace(/\\\(([^\n]+?)\\\)/g, (_, m) => `<span class="math-inline">${m.trim()}</span>`);
+  // 5. Строчные формулы $...$ и \(...\)
+  s = s.replace(/\$([^\n$]+?)\$/g, (_, m) => `<span class="math-inline">${m.replace(/-/g, '−').trim()}</span>`);
+  s = s.replace(/\\\(([^\n]+?)\\\)/g, (_, m) => `<span class="math-inline">${m.replace(/-/g, '−').trim()}</span>`);
 
-  // 4. Верхние и нижние индексы: x^{2}, x^2, x_{1}, x_1, м/с^2, 10^{-5}
+  // 6. Верхние и нижние индексы: x^{2}, x^2, x_{1}, x_1, 10^{-5}
   s = s.replace(/\^\{([^{}\n]+)\}/g, '<sup>$1</sup>');
   s = s.replace(/_\{([^{}\n]+)\}/g, '<sub>$1</sub>');
   s = s.replace(/\^([+\-]?\d+|[a-zA-Z])/g, '<sup>$1</sup>');
   s = s.replace(/([a-zA-Zа-яА-Я0-9)])_(\d+|[a-zA-Z])/g, '$1<sub>$2</sub>');
 
-  // 5. Химические формулы (H2O, H2SO4, CO2, Ca(OH)2, Fe2O3, C6H12O6 и др.)
+  // 7. Химические формулы (H2O, H2SO4, CO2, Ca(OH)2, Fe2O3, C6H12O6)
   s = s.replace(/\b((?:[A-Z][a-z]?|\([A-Za-z0-9]+\))\d+)+([A-Z][a-z]?)?\b/g, match =>
     match.replace(/([A-Z][a-z]?|\))(\d+)/g, '$1<sub>$2</sub>')
   );
 
-  // 6. Римские цифры для веков по истории (например, xiv век -> XIV век)
+  // 8. Римские цифры для веков по истории (xiv век -> XIV век)
   s = s.replace(/\b([ivxlcdm]{1,7})(\s*(?:[–\-]\s*[ivxlcdm]{1,7})?\s*(?:в\.|вв\.|век|asr|century))/gi,
     (_, rom, tail) => rom.toUpperCase() + tail
   );
 
-  // 7. Markdown: заголовки, линии, жирный, курсив, код
+  // 9. Подписи к рисункам [Рисунок 1: ...] и определения в [квадратных скобках]
+  s = s.replace(/\[\s*((?:Рисунок|Рис\.|Rasm|Таблица|Chizma)[^\]]*)\]/gi, '<div class="fig-badge">🖼️ $1</div>');
+  s = s.replace(/\[([^\[\]]{20,})\]/g, '<div class="rule-box">📌 $1</div>');
+
+  // 10. Пункты списков 1) 2) 3) с новой строки
+  s = s.replace(/([.!?])\s+(\d+\)\s+)/g, '$1<div class="step-item"><b>$2</b></div>');
+
+  // 11. Markdown: заголовки, линии, жирный, курсив, код, переносы строк
   s = s.replace(/^\s*---+\s*$/gm, '<hr class="ai-hr">');
   s = s.replace(/^#{1,4}\s+(.+)$/gm, '<div class="ai-h">$1</div>');
   s = s.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
   s = s.replace(/\*([^*\n]+)\*/g, '<i>$1</i>');
   s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  s = s.replace(/\n/g, '<br>');
 
   return s;
 }
@@ -463,10 +545,9 @@ const DEFAULT_MODELS = [
   'gemini-1.5-flash-latest'
 ];
 
-let pendingChatImage = null; // { base64, mimeType, dataUrl, name }
+let pendingChatImage = null;
 
 function setupPhotoUI(){
-  // 1. Кнопка фото и превью в Чате
   const chatbar = document.querySelector('.chatbar');
   if (chatbar && !$('chatPhotoBtn')) {
     const prev = document.createElement('div');
@@ -493,7 +574,6 @@ function setupPhotoUI(){
     chatbar.appendChild(inp);
   }
 
-  // 2. Кнопка распознавания фото страниц во вкладке «Книги»
   const bookContent = $('bookContent');
   if (bookContent && !$('ocrPhotoBtn')) {
     const wrap = document.createElement('div');
@@ -1049,14 +1129,20 @@ async function loadDictsFromGitHub(){
   }
   showLoad(false);
 }
+
+/* === ПОДСВЕТКА ПОИСКА ПОВЕРХ КРАСИВЫХ ФОРМУЛ И ТАБЛИЦ === */
 function highlight(text, q){
-  let html = escapeHtml(text);
-  fold(q).split(/\s+/).filter(w => w.length > 2).forEach(w => {
-    const re = new RegExp('(' + w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')', 'gi');
-    html = html.replace(re, '<mark>$1</mark>');
+  let html = formatSchoolText(text);
+  const words = fold(q).split(/\s+/).filter(w => w.length > 2);
+  if (!words.length) return html;
+  words.forEach(w => {
+    const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(<[^>]+>)|(${escaped})`, 'gi');
+    html = html.replace(re, (m, tag, hit) => tag ? tag : `<mark>${hit}</mark>`);
   });
   return html;
 }
+
 async function renderBooks(){
   const books = await getBooks();
   const f = $('filterSubject').value;
@@ -1093,7 +1179,14 @@ async function renderCards(reset){
   const slice = lastCardItems.slice(cardOffset, cardOffset + CARD_PAGE);
   $('cardStats').textContent = `Карточек: ${lastCardItems.length}` + (lastCardItems.length ? ` · показаны ${Math.min(cardOffset+slice.length, lastCardItems.length)}` : '');
   const q = $('cardQuery').value;
-  $('cardList').insertAdjacentHTML('beforeend', slice.map((c, idx) => `<article class="pcard"><div class="meta"><span class="badge">${escapeHtml(subName(c.subject))}</span><span>${escapeHtml(c.book)} · ${c.i+1}</span></div><div class="ttl">${escapeHtml(cardTitle(c.text))}</div><div class="body">${highlight(c.text, q)}</div><div class="actions"><button class="ghost" type="button" onclick="toggleCard(this)">Ещё</button><button type="button" onclick="askAbout(${cardOffset+idx})">Спросить</button></div></article>`).join('') || (reset ? '<p class="note">Нет параграфов.</p>' : ''));
+  $('cardList').insertAdjacentHTML('beforeend', slice.map((c, idx) =>
+    `<article class="pcard">
+      <div class="meta"><span class="badge">${escapeHtml(subName(c.subject))}</span><span>${escapeHtml(c.book)} · ${c.i+1}</span></div>
+      <div class="ttl">${formatSchoolText(cardTitle(c.text))}</div>
+      <div class="body">${highlight(c.text, q)}</div>
+      <div class="actions"><button class="ghost" type="button" onclick="toggleCard(this)">Ещё</button><button type="button" onclick="askAbout(${cardOffset+idx})">Спросить</button></div>
+    </article>`
+  ).join('') || (reset ? '<p class="note">Нет параграфов.</p>' : ''));
   cardOffset += slice.length;
   $('moreCardsBtn').style.display = cardOffset < lastCardItems.length ? 'inline-block' : 'none';
 }
