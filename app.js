@@ -54,6 +54,7 @@ function $(id){ return document.getElementById(id); }
 
 function showLoad(on, text){
   const el = $('overlay');
+  if (!el) return;
   el.textContent = text || 'Обработка…';
   el.classList.toggle('on', !!on);
 }
@@ -256,9 +257,24 @@ async function deleteDict(id){
   renderDicts(true);
 }
 
-/* === РАЗБИВКА НА КАРТОЧКИ БЕЗ РАЗРЫВА ТАБЛИЦ И НОМЕРОВ ЗАДАЧ === */
+/* === ОЧИСТКА ТЕКСТА JSON/OCR И РАЗБИВКА НА КАРТОЧКИ БЕЗ РАЗРЫВА ТАБЛИЦ === */
+function cleanBookContent(rawText){
+  if (!rawText) return '';
+  return String(rawText)
+    .replace(/\r\n/g, '\n')
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, ' ')
+    .replace(/\\"/g, '"')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFD]/g, '')
+    .replace(/^\s*[{}\[\]]+\s*$/gm, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function splitIntoCards(content){
-  let raw = (content||'').replace(/\r\n/g,'\n').trim();
+  let raw = cleanBookContent(content);
   if (!raw) return [];
 
   // Схлопываем переносы внутри HTML-таблиц, чтобы таблица не рвалась пополам
@@ -294,11 +310,13 @@ function splitIntoCards(content){
 }
 
 function cardTitle(text){
-  const clean = (text||'')
+  const clean = cleanBookContent(text)
     .replace(/<[^>]+>/g, ' ')
     .replace(/&[a-zA-Z0-9#]+;/g, ' ')
     .replace(/^\s*---+\s*/gm, '')
     .replace(/\[\s*(?:Рисунок|Рис\.|Rasm|Таблица|Chizma)[^\]]*\]/gi, '')
+    .replace(/["'`{}\[\]\\]+/g, '')
+    .replace(/^[*#_\-–—•·:;,.!?]+\s*/, '')
     .replace(/\s+/g, ' ')
     .trim();
   const rx = /^((?:§+\s*[\d.]+|параграф\s*[\d.]+|глава\s*[\d.]+|bob\s*[\d.]+|mavzu\s*[\d.]+|unit\s*[\d.]+|chapter\s*[\d.]+)\s*(?:[А-ЯA-ZЁЎҚҒҲ0-9$:+=^_\-\s]{2,55})?)/i;
@@ -430,83 +448,6 @@ function smartAnswer(query, bookRes, dictHits){
   return out;
 }
 
-/* === СТИЛИ УЧЕБНИКА: ДРОБИ, СИСТЕМЫ УРАВНЕНИЙ, КОРНИ И ТАБЛИЦЫ === */
-(function injectMathStyles(){
-  const old = document.getElementById('schoolMathStyles');
-  if (old) old.remove();
-  const st = document.createElement('style');
-  st.id = 'schoolMathStyles';
-  st.textContent = `
-    .msg, .pcard .body, .pcard .ttl, .dcard { line-height: 1.65; }
-    .pcard .body { white-space: normal; overflow-wrap: break-word; }
-    .msg sup, .pcard sup, .dcard sup {
-      font-size: 0.72em; vertical-align: super; line-height: 0; font-weight: 700;
-    }
-    .msg sub, .pcard sub, .dcard sub {
-      font-size: 0.72em; vertical-align: sub; line-height: 0; font-weight: 700;
-    }
-    .ai-h { font-weight: 800; color: var(--green); font-size: 1.04em; margin: 8px 0 4px; }
-    .ai-hr { border: 0; border-top: 1px dashed var(--line); margin: 8px 0; }
-    .math-block {
-      background: var(--card); border-left: 3px solid var(--green);
-      padding: 8px 12px; margin: 8px 0; border-radius: 8px;
-      font-weight: 700; overflow-x: auto; text-align: center;
-    }
-    .math-inline {
-      font-family: 'Cambria Math', 'Times New Roman', serif;
-      font-weight: 700; font-size: 1.05em; padding: 0 2px;
-      white-space: normal; overflow-wrap: break-word;
-    }
-    .frac {
-      display: inline-flex; flex-direction: column; vertical-align: middle;
-      text-align: center; padding: 0 3px; font-size: 0.92em; line-height: 1.15;
-    }
-    .frac .num { border-bottom: 1.5px solid currentColor; padding: 0 3px 1px; }
-    .frac .den { padding: 1px 3px 0; }
-    .sqrt { display: inline-flex; align-items: baseline; white-space: nowrap; }
-    .sqrt .rad {
-      border-top: 1.5px solid currentColor; padding: 0 2px; margin-left: 1px;
-    }
-    .math-cases {
-      display: inline-flex; align-items: stretch; vertical-align: middle;
-      margin: 4px 0; max-width: 100%;
-    }
-    .math-cases .case-brace {
-      border-left: 2.5px solid var(--green);
-      border-top: 2.5px solid var(--green);
-      border-bottom: 2.5px solid var(--green);
-      border-radius: 7px 0 0 7px; width: 8px; margin-right: 7px; flex-shrink: 0;
-    }
-    .math-cases .case-body {
-      display: flex; flex-direction: column; justify-content: center;
-      gap: 3px; text-align: left;
-    }
-    .rule-box {
-      background: rgba(46, 125, 50, 0.12);
-      border-left: 4px solid var(--green);
-      padding: 8px 12px; margin: 8px 0; border-radius: 8px; font-weight: 500;
-    }
-    .fig-badge {
-      display: inline-block; background: var(--card); border: 1px solid var(--line);
-      padding: 4px 10px; margin: 6px 0; border-radius: 8px; font-size: 0.88em;
-    }
-    .table-wrap { overflow-x: auto; margin: 8px 0; }
-    .school-table, .pcard table {
-      border-collapse: collapse; width: 100%; font-size: 0.92em;
-      background: var(--card); border-radius: 8px; overflow: hidden; margin: 6px 0;
-    }
-    .school-table th, .school-table td, .pcard table th, .pcard table td {
-      border: 1px solid var(--line); padding: 5px 8px; vertical-align: middle;
-    }
-    .school-table tr:first-child { background: rgba(46, 125, 50, 0.15); font-weight: 700; }
-    .step-item { margin-top: 6px; }
-    .msg code, .pcard code {
-      background: var(--card); padding: 1px 5px; border-radius: 5px; font-size: 0.9em;
-    }
-  `;
-  document.head.appendChild(st);
-})();
-
 function restoreSafeHtml(s){
   // 1. Возвращаем иконки и спецсимволы HTML (&#8987;, &#128214;, &nbsp; и др.)
   s = s.replace(/&amp;(#\d+|#x[0-9a-fA-F]+|[a-zA-Z0-9]+);/g, '&$1;');
@@ -617,7 +558,7 @@ function renderMarkdownTables(s){
 }
 
 function formatSchoolText(raw){
-  let s = escapeHtml(raw || '');
+  let s = escapeHtml(cleanBookContent(raw));
 
   // 1. Восстанавливаем HTML-таблицы и спецсимволы (&#8987; и т.д.)
   s = restoreSafeHtml(s);
@@ -1146,7 +1087,7 @@ function dictObj(o){
 function dictKey(d){ return (d.lang || '') + '|' + (d.wordNorm || fold(d.word)); }
 
 async function addBookObj(name, subject, content){
-  content = (content||'').trim();
+  content = cleanBookContent(content);
   name = (name||'Без названия').trim();
   if (content.length < 20) throw new Error('Слишком мало текста: ' + name);
   await saveBook({ name, subject: subject || 'other', content, added: Date.now() });
@@ -1229,7 +1170,10 @@ async function importPayload(data, mergeAsk){
     : true;
   if (books.length) {
     await storeImport('books', books, merge, 'uzb9books_fb', b => ({
-      name: b.name, subject: b.subject || 'other', content: b.content || '', added: Date.now()
+      name: (b.name || 'Без названия').trim(),
+      subject: b.subject || 'other',
+      content: cleanBookContent(b.content || ''),
+      added: Date.now()
     }));
   }
   if (dicts.length) {
@@ -1493,7 +1437,9 @@ function applyTheme(t){
   document.documentElement.setAttribute('data-theme', t);
   localStorage.setItem('uzb9theme', t);
   $('themeBtn').textContent = t === 'dark' ? '☀️' : '🌙';
-  $('themeColor').setAttribute('content', t === 'dark' ? '#0f1611' : '#e8f5e9');
+  if ($('themeColor')) {
+    $('themeColor').setAttribute('content', t === 'dark' ? '#0f1611' : '#e8f5e9');
+  }
 }
 
 function initTheme(){
